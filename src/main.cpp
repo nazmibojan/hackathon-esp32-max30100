@@ -1,16 +1,21 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-
-#define TOKEN "SEMARCOLD_DEMO_TOKEN"
+#include <Wire.h>
+#include <MAX30100_PulseOximeter.h>
 
 const char* ssid = "Advanced IoT Labs";
 const char* password = "Heisenberg1932";
-const char mqtt_server[] = "thingsboard.cloud"; 
+const char mqtt_server[] = "thingsboard.cloud";
+const char mqtt_clientid[] = "pulseox001";
+const char mqtt_username[] = "pulseox";
+const char mqtt_pass[] = "pul$3ox";
 const char publishTopic[] = "v1/devices/me/telemetry"; 
 
 WiFiClient client;
 PubSubClient mqttClient(client);
+PulseOximeter pox;
+
 long lastData = 0;
 
 void setup_wifi(){
@@ -31,12 +36,17 @@ void setup_wifi(){
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
+
+  if (!pox.begin(PULSEOXIMETER_DEBUGGINGMODE_NONE)) {
+    Serial.println("ERROR: Failed to initialize pulse oximeter");
+    for(;;);
+  }
 }
 
 void reconnect(){
   while(!mqttClient.connected()){
     Serial.print("Attempting MQTT connection ....");
-    if (mqttClient.connect("pulseox001", "pulseox", "pul$3ox")) { 
+    if (mqttClient.connect(mqtt_clientid, mqtt_username, mqtt_pass)) { 
       Serial.println("Connected to MQTT Broker");
     } else {
       Serial.print("failed, rc=");
@@ -54,25 +64,29 @@ void setup() {
 }
 
 void loop() {
+  pox.update();
+
   if (!mqttClient.connected()) {
     reconnect();
   }
 
   mqttClient.loop();
   
-  String payload = "{\"bpm\":";
-  payload += String(20);
-  payload += ",\"spo2\":";
-  payload += String(400);
-  payload += "}";
-
-  char attributes[1000];
   long now = millis();
 
-  if(now - lastData > 30000){
+  if(now - lastData > 5000){
     lastData = now;
+
+    String payload = "{\"bpm\":";
+    payload += String(pox.getHeartRate());
+    payload += ",\"spo2\":";
+    payload += String(pox.getSpO2());
+    payload += "}";
+
+    char attributes[1000];
     payload.toCharArray(attributes, 1000);
-    mqttClient.publish(publishTopic, attributes);
     Serial.println(attributes);
+
+    mqttClient.publish(publishTopic, attributes);
   }
 }
