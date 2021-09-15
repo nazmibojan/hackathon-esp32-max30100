@@ -4,6 +4,8 @@
 #include <Wire.h>
 #include <MAX30100_PulseOximeter.h>
 
+#define DUMMY_DATA
+
 const char* ssid = "Advanced IoT Labs";
 const char* password = "Heisenberg1932";
 const char mqtt_server[] = "thingsboard.cloud";
@@ -37,10 +39,12 @@ void setup_wifi(){
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 
+#ifndef DUMMY_DATA
   if (!pox.begin(PULSEOXIMETER_DEBUGGINGMODE_NONE)) {
     Serial.println("ERROR: Failed to initialize pulse oximeter");
     for(;;);
   }
+#endif
 }
 
 void reconnect(){
@@ -64,7 +68,9 @@ void setup() {
 }
 
 void loop() {
+#ifndef DUMMY_DATA
   pox.update();
+#endif
 
   if (!mqttClient.connected()) {
     reconnect();
@@ -76,11 +82,19 @@ void loop() {
 
   if(now - lastData > 5000){
     lastData = now;
+  
+  #ifndef DUMMY_DATA
+    float heartRate = pox.getHeartRate();
+    uint8_t spo2 = pox.getSpO2();
+  #else
+    float heartRate = (float)(millis() % 143);
+    uint8_t spo2 = (uint8_t)(millis() % 99);
+  #endif
 
     String payload = "{\"bpm\":";
-    payload += String(pox.getHeartRate());
+    payload += String(heartRate);
     payload += ",\"spo2\":";
-    payload += String(pox.getSpO2());
+    payload += String(spo2);
     payload += "}";
 
     char attributes[1000];
