@@ -4,7 +4,7 @@
 #include <Wire.h>
 #include <MAX30100_PulseOximeter.h>
 
-#define DUMMY_DATA
+// #define DUMMY_DATA
 
 const char* ssid = "Advanced IoT Labs";
 const char* password = "Heisenberg1932";
@@ -38,13 +38,6 @@ void setup_wifi(){
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
-
-#ifndef DUMMY_DATA
-  if (!pox.begin(PULSEOXIMETER_DEBUGGINGMODE_NONE)) {
-    Serial.println("ERROR: Failed to initialize pulse oximeter");
-    for(;;);
-  }
-#endif
 }
 
 void reconnect(){
@@ -63,8 +56,19 @@ void reconnect(){
 
 void setup() {
   Serial.begin(9600);
+  pinMode(19, OUTPUT);
+  delay(100);
   setup_wifi();
   mqttClient.setServer(mqtt_server, 1883);
+
+#ifndef DUMMY_DATA
+  if (!pox.begin()) {
+    Serial.println("ERROR: Failed to initialize pulse oximeter");
+    for(;;);
+  } else {
+    Serial.println("MAX30100 initialization is success");
+  }
+#endif
 }
 
 void loop() {
