@@ -1,43 +1,148 @@
-#include <Arduino.h>
+//MAX30100 ESP32 WebServer
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <WebServer.h>
 #include <Wire.h>
-#include <MAX30100_PulseOximeter.h>
+#include "MAX30100_PulseOximeter.h"
+ #include <PubSubClient.h>
 
-// #define DUMMY_DATA
+#define REPORTING_PERIOD_MS     1000
 
-const char* ssid = "Advanced IoT Labs";
-const char* password = "Heisenberg1932";
+float BPM, SpO2;
+
+/*Put your SSID & Password*/
+const char* ssid = "Advanced IoT Labs";  // Enter SSID here
+const char* password = "Heisenberg1932";  //Enter Password here
 const char mqtt_server[] = "thingsboard.cloud";
 const char mqtt_clientid[] = "pulseox001";
 const char mqtt_username[] = "pulseox";
 const char mqtt_pass[] = "pul$3ox";
 const char publishTopic[] = "v1/devices/me/telemetry"; 
 
+float lastHeartRate, lastSpo2;
+unsigned lastPublish = 0;
+
+PulseOximeter pox;
+uint32_t tsLastReport = 0;
+
+WebServer server(80);
 WiFiClient client;
 PubSubClient mqttClient(client);
-PulseOximeter pox;
 
-long lastData = 0;
+void reconnect();
+void handle_OnConnect();
+void handle_NotFound();
+String SendHTML(float BPM, float SpO2);
 
-void setup_wifi(){
-  delay(10);
-  Serial.println();
-  Serial.print("Connecting to ");
+void onBeatDetected()
+{
+  Serial.println("Beat Detected!");
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(19, OUTPUT);
+  delay(100);
+  Serial.println("Connecting to ");
   Serial.println(ssid);
+
+  //connect to your local wi-fi network
   WiFi.begin(ssid, password);
 
-  while( WiFi.status() != WL_CONNECTED){
+  //check wi-fi is connected to wi-fi network
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected..!");
+  Serial.print("Got IP: ");  Serial.println(WiFi.localIP());
 
-    delay(500);
-    Serial.print(".");   
+  mqttClient.setServer(mqtt_server, 1883);
+  reconnect();
+  
+  // server.on("/", handle_OnConnect);
+  // server.onNotFound(handle_NotFound);
+
+  // server.begin();
+  Serial.println("HTTP server started");
+  
+  Serial.print("Initializing pulse oximeter..");
+
+  if (!pox.begin()) {
+    Serial.println("FAILED");
+    for (;;);
+  } else {
+    Serial.println("SUCCESS");
+
+    pox.setOnBeatDetectedCallback(onBeatDetected);
   }
 
-  randomSeed(micros());
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  pox.setIRLedCurrent(MAX30100_LED_CURR_7_6MA);
+}
+void loop() {
+  if (!mqttClient.connected()) {
+    reconnect();
+
+    if (!pox.begin()) {
+      Serial.println("FAILED");
+      for (;;);
+    } else {
+      Serial.println("SUCCESS");
+
+      pox.setOnBeatDetectedCallback(onBeatDetected);
+    }
+
+    pox.setIRLedCurrent(MAX30100_LED_CURR_7_6MA);
+  }
+
+  // server.handleClient();
+  uint8_t loopRead = 0;
+  while (loopRead < 50) {
+    loopRead++;
+    pox.update();
+    BPM = pox.getHeartRate();
+    SpO2 = pox.getSpO2();
+
+    if (BPM != 0.0)
+      lastHeartRate = BPM;
+  
+    if (SpO2 != 0.0)
+      lastSpo2 = SpO2;
+  }
+
+  if (millis() - tsLastReport > REPORTING_PERIOD_MS)
+  {
+
+    Serial.print("BPM: ");
+    Serial.println(lastHeartRate);
+
+    Serial.print("SpO2: ");
+    Serial.print(lastSpo2);
+    Serial.println("%");
+
+    Serial.println("*********************************");
+    Serial.println();
+
+    tsLastReport = millis();
+  }
+
+  if(millis() - lastPublish > 5000){
+    lastPublish = millis();
+
+    String payload = "{\"bpm\":";
+    payload += String(lastHeartRate);
+    payload += ",\"spo2\":";
+    payload += String(lastSpo2);
+    payload += "}";
+
+    char attributes[1000];
+    payload.toCharArray(attributes, 1000);
+    Serial.println(attributes);
+
+    mqttClient.publish(publishTopic, attributes);
+  }
+
+  mqttClient.loop();
 }
 
 void reconnect(){
@@ -54,57 +159,92 @@ void reconnect(){
   }
 }
 
-void setup() {
-  Serial.begin(9600);
-  pinMode(19, OUTPUT);
-  delay(100);
-  setup_wifi();
-  mqttClient.setServer(mqtt_server, 1883);
+void handle_OnConnect() {
 
-#ifndef DUMMY_DATA
-  if (!pox.begin()) {
-    Serial.println("ERROR: Failed to initialize pulse oximeter");
-    for(;;);
-  } else {
-    Serial.println("MAX30100 initialization is success");
-  }
-#endif
+  server.send(200, "text/html", SendHTML(BPM, SpO2));
 }
 
-void loop() {
-#ifndef DUMMY_DATA
-  pox.update();
-#endif
+void handle_NotFound() {
+  server.send(404, "text/plain", "Not found");
+}
 
-  if (!mqttClient.connected()) {
-    reconnect();
-  }
+String SendHTML(float BPM, float SpO2) {
+  String ptr = "<!DOCTYPE html>";
+  ptr += "<html>";
+  ptr += "<head>";
+  ptr += "<title>Pulse Oximeter ESP32 WebServer</title>";
+  ptr += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  ptr += "<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.7.2/css/all.min.css'>";
+  ptr += "<link rel='stylesheet' type='text/css' href='styles.css'>";
+  ptr += "<style>";
+  ptr += "body { background-color: #fff; font-family: sans-serif; color: #333333; font: 14px Helvetica, sans-serif box-sizing: border-box;}";
+  ptr += "#page { margin: 20px; background-color: #fff;}";
+  ptr += ".container { height: inherit; padding-bottom: 20px;}";
+  ptr += ".header { padding: 20px;}";
+  ptr += ".header h1 { padding-bottom: 0.3em; color: #008080; font-size: 45px; font-weight: bold; font-family: Garmond, 'sans-serif'; text-align: center;}";
+  ptr += "h2 { padding-bottom: 0.2em; border-bottom: 1px solid #eee; margin: 2px; text-align: left;}";
+  ptr += ".header h3 { font-weight: bold; font-family: Arial, 'sans-serif'; font-size: 17px; color: #b6b6b6; text-align: center;}";
+  ptr += ".box-full { padding: 20px; border 1px solid #ddd; border-radius: 1em 1em 1em 1em; box-shadow: 1px 7px 7px 1px rgba(0,0,0,0.4); background: #fff; margin: 20px; width: 300px;}";
+  ptr += "@media (max-width: 494px) { #page { width: inherit; margin: 5px auto; } #content { padding: 1px;} .box-full { margin: 8px 8px 12px 8px; padding: 10px; width: inherit;; float: none; } }";
+  ptr += "@media (min-width: 494px) and (max-width: 980px) { #page { width: 465px; margin 0 auto; } .box-full { width: 380px; } }";
+  ptr += "@media (min-width: 980px) { #page { width: 930px; margin: auto; } }";
+  ptr += ".sensor { margin: 12px 0px; font-size: 2.5rem;}";
+  ptr += ".sensor-labels { font-size: 1rem; vertical-align: middle; padding-bottom: 15px;}";
+  ptr += ".units { font-size: 1.2rem;}";
+  ptr += "hr { height: 1px; color: #eee; background-color: #eee; border: none;}";
+  ptr += "</style>";
 
-  mqttClient.loop();
-  
-  long now = millis();
+  //Ajax Code Start
+  ptr += "<script>\n";
+  ptr += "setInterval(loadDoc,1000);\n";
+  ptr += "function loadDoc() {\n";
+  ptr += "var xhttp = new XMLHttpRequest();\n";
+  ptr += "xhttp.onreadystatechange = function() {\n";
+  ptr += "if (this.readyState == 4 && this.status == 200) {\n";
+  ptr += "document.body.innerHTML =this.responseText}\n";
+  ptr += "};\n";
+  ptr += "xhttp.open(\"GET\", \"/\", true);\n";
+  ptr += "xhttp.send();\n";
+  ptr += "}\n";
+  ptr += "</script>\n";
+  //Ajax Code END
 
-  if(now - lastData > 5000){
-    lastData = now;
-  
-  #ifndef DUMMY_DATA
-    float heartRate = pox.getHeartRate();
-    uint8_t spo2 = pox.getSpO2();
-  #else
-    float heartRate = (float)(millis() % 143);
-    uint8_t spo2 = (uint8_t)(millis() % 99);
-  #endif
+  ptr += "</head>";
+  ptr += "<body>";
+  ptr += "<div id='page'>";
+  ptr += "<div class='header'>";
+  ptr += "<h1>MAX30100 ESP32 WebServer</h1>";
+  ptr += "<h3><a href='https://theiotprojects.com'>https://theiotprojects.com</a></h3>";
+  ptr += "</div>";
+  ptr += "<div id='content' align='center'>";
+  ptr += "<div class='box-full' align='left'>";
+  ptr += "<h2>Sensor Readings</h2>";
+  ptr += "<div class='sensors-container'>";
 
-    String payload = "{\"bpm\":";
-    payload += String(heartRate);
-    payload += ",\"spo2\":";
-    payload += String(spo2);
-    payload += "}";
 
-    char attributes[1000];
-    payload.toCharArray(attributes, 1000);
-    Serial.println(attributes);
+  //For Heart Rate
+  ptr += "<p class='sensor'>";
+  ptr += "<i class='fas fa-heartbeat' style='color:#cc3300'></i>";
+  ptr += "<span class='sensor-labels'> Heart Rate </span>";
+  ptr += (int)BPM;
+  ptr += "<sup class='units'>BPM</sup>";
+  ptr += "</p>";
+  ptr += "<hr>";
 
-    mqttClient.publish(publishTopic, attributes);
-  }
+  //For Sp02
+  ptr += "<p class='sensor'>";
+  ptr += "<i class='fas fa-burn' style='color:#f7347a'></i>";
+  ptr += "<span class='sensor-labels'> Sp02 </span>";
+  ptr += (int)SpO2;
+  ptr += "<sup class='units'>%</sup>";
+  ptr += "</p>";
+
+  ptr += "</div>";
+  ptr += "</div>";
+  ptr += "</div>";
+  ptr += "</div>";
+  ptr += "</div>";
+  ptr += "</body>";
+  ptr += "</html>";
+  return ptr;
 }
